@@ -1,18 +1,28 @@
-"""Experimental original Triton casts in bitsandbytes Linear4bit's training forward.
+"""Selective Triton dtype casts in bitsandbytes Linear4bit training.
 
-This substitutes only the two dtype conversions in the normal GPU/biasless
-Linear4bit path; the bitsandbytes 4-bit GEMM and its quantization stay intact.
+Only the Qwen MLP down-projection (8960 input features) uses custom
+casts; other 4-bit layers use their unmodified fast library implementation.
+The bitsandbytes 4-bit GEMM and quantization remain unchanged.
 No changes to the task config, data, trainable weights, or optimizer.
 
 Source for integration semantics (not kernel code):
   https://github.com/bitsandbytes-foundation/bitsandbytes/blob/0.50.2/bitsandbytes/nn/modules.py
 
 Candidate only: must pass the official GPU harness and >=5% own-kernel check.
+Performance rationale: v4 cast all 4-bit layers (29.7% own GPU time) but was
+18.2% slower overall. This candidate narrows work to the largest input
+transformation while restoring the efficient default elsewhere.
 """
 
 import torch
 import triton
 import triton.language as tl
+
+# Fixed, data-independent candidate switch for experiments. The default
+# preserves BOTH casts for down_proj; set False in source before a NEW
+# experiment only if full benchmark shows excess overhead. No seed/bench
+# detection is used.
+DOWN_OUTPUT_CAST_TRITON = True
 
 
 @triton.jit
@@ -66,10 +76,10 @@ def qlora_cast(x, dtype):
 
 
 def patch_bnb_linear4bit_casts():
-    """Conservatively patch the exact fixed-task QLoRA GPU Linear4bit path.
+    """Patch only the MLP down projection, all other paths use original.
 
-    Every other case uses the library's original forward; only the real cast
-    operations in a quantized linear layer are replaced. No global torch patch.
+    This is a narrower, input-shape based training specialization; the
+    same selection applies regardless of benchmark or training data.
     """
     import bitsandbytes as bnb
     from bitsandbytes.nn import modules as bnb_modules
@@ -88,7 +98,7 @@ def patch_bnb_linear4bit_casts():
             and x.is_cuda
             and x.is_contiguous()
             and x.ndim in (2, 3)
-            and x.shape[-1] in (1536, 8960)
+            and x.shape[-1] == 8960
             and x.numel() >= 4096
             and x.dtype == torch.float32
             and self.compute_dtype == torch.float16
@@ -104,12 +114,15 @@ def patch_bnb_linear4bit_casts():
             self.set_compute_type(x)
             self.compute_type_is_set = True
 
-        # The two exact casts from Linear4bit.forward are implemented in Triton.
+        # Large MLP down-projection input is converted in Triton.
+        # All GEMM code continues to come from bitsandbytes.
         converted = qlora_cast(x, self.compute_dtype)
         result = bnb.matmul_4bit(
             converted, self.weight, bias=None, quant_state=self.weight.quant_state,
         )
-        return qlora_cast(result, x.dtype)
+        if DOWN_OUTPUT_CAST_TRITON:
+            return qlora_cast(result, x.dtype)
+        return result.to(x.dtype)
 
     forward._soup_qlora_cast_patch = True
     forward._soup_qlora_cast_original = original
