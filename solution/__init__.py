@@ -1,6 +1,6 @@
-"""Soup Kernel Challenge original kernel candidate v4.
+"""Soup Kernel Challenge original kernel candidate v5.
 
-Original: RMSNorm, tiled CE, entropy, argmax, QLoRA dtype cast.
+Original: RMSNorm, tiled CE, entropy, argmax, selective QLoRA down-projection cast.
 The official SwiGLU example remains unmodified and is NOT our own kernel.
 """
 from .swiglu import patch_qwen2_mlp
@@ -17,4 +17,4 @@ def apply():
     patch_qwen_cross_entropy()
     patch_trl_entropy()
     patch_qwen_token_accuracy_argmax()
-    patch_bnb_linear4bit_casts()             # new original v4 candidate
+    patch_bnb_linear4bit_casts()             # selective original v5 candidate
