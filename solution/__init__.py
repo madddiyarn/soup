@@ -8,6 +8,7 @@ from .swiglu import patch_qwen2_mlp
 from .rmsnorm import patch_qwen2_rmsnorm
 from .vocab_ce import patch_qwen_cross_entropy
 from .entropy import patch_trl_entropy
+from .argmax_ops import patch_qwen_token_accuracy_argmax
 
 
 def apply():
@@ -15,3 +16,4 @@ def apply():
     patch_qwen2_rmsnorm()         # Original; prior Kaggle check: 1.3% share.
     patch_qwen_cross_entropy()   # New original candidate; must benchmark.
     patch_trl_entropy()          # New original candidate; must benchmark.
+    patch_qwen_token_accuracy_argmax()  # Original token accuracy reduction; experimental.
