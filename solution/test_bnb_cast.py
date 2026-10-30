@@ -24,15 +24,16 @@ def test_bnb_cast_matches_torch_forward_and_backward(shape, src, dst):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='needs CUDA GPU')
-def test_linear4bit_patch_preserves_computation():
+@pytest.mark.parametrize("in_features", [1536, 8960])
+def test_linear4bit_patch_preserves_computation(in_features):
     import bitsandbytes as bnb
 
     torch.manual_seed(2026)
     module = bnb.nn.Linear4bit(
-        1536, 256, bias=False, compute_dtype=torch.float16,
+        in_features, 256, bias=False, compute_dtype=torch.float16,
         compress_statistics=True, quant_type='nf4',
     ).cuda().train()
-    x_data = torch.randn((4, 8, 1536), device='cuda', dtype=torch.float32) * 0.05
+    x_data = torch.randn((4, 8, in_features), device='cuda', dtype=torch.float32) * 0.05
     x_ref = x_data.detach().clone().requires_grad_(True)
     x_new = x_data.detach().clone().requires_grad_(True)
     ref = module(x_ref)
