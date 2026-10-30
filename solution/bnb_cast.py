@@ -1,7 +1,7 @@
-"""Selective Triton dtype casts in bitsandbytes Linear4bit training.
+"""Output-only Triton dtype cast in bitsandbytes Linear4bit training.
 
-Only the Qwen MLP down-projection (8960 input features) uses custom
-casts; other 4-bit layers use their unmodified fast library implementation.
+Only the output cast of Qwen MLP down-projection (8960 input features)
+uses custom Triton; the larger input cast uses fast native PyTorch.
 The bitsandbytes 4-bit GEMM and quantization remain unchanged.
 No changes to the task config, data, trainable weights, or optimizer.
 
@@ -9,19 +9,20 @@ Source for integration semantics (not kernel code):
   https://github.com/bitsandbytes-foundation/bitsandbytes/blob/0.50.2/bitsandbytes/nn/modules.py
 
 Candidate only: must pass the official GPU harness and >=5% own-kernel check.
-Performance rationale: v4 cast all 4-bit layers (29.7% own GPU time) but was
-18.2% slower overall. This candidate narrows work to the largest input
-transformation while restoring the efficient default elsewhere.
+Performance rationale: v5 restricted the cast to MLP down-projections but
+was still 15.5% slower. Native PyTorch handles the larger input conversion;
+our Triton implementation handles only the smaller output conversion.
+This is a TESTABLE hypothesis; no GPU benchmark has been run here.
 """
 
 import torch
 import triton
 import triton.language as tl
 
-# Fixed, data-independent candidate switch for experiments. The default
-# preserves BOTH casts for down_proj; set False in source before a NEW
-# experiment only if full benchmark shows excess overhead. No seed/bench
-# detection is used.
+# Both switches are fixed for the entire run and apply regardless of dataset,
+# random seed, benchmark status, or measured execution time.
+# v6: keep the large input cast on the native PyTorch path.
+DOWN_INPUT_CAST_TRITON = False
 DOWN_OUTPUT_CAST_TRITON = True
 
 
@@ -114,9 +115,12 @@ def patch_bnb_linear4bit_casts():
             self.set_compute_type(x)
             self.compute_type_is_set = True
 
-        # Large MLP down-projection input is converted in Triton.
-        # All GEMM code continues to come from bitsandbytes.
-        converted = qlora_cast(x, self.compute_dtype)
+        # Default: native input cast; output cast is the original v6 experiment.
+        # GEMM remains the unchanged bitsandbytes operation.
+        converted = (
+            qlora_cast(x, self.compute_dtype) if DOWN_INPUT_CAST_TRITON
+            else x.to(self.compute_dtype)
+        )
         result = bnb.matmul_4bit(
             converted, self.weight, bias=None, quant_state=self.weight.quant_state,
         )
